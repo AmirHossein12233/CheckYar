@@ -1,4 +1,3 @@
-
 import './style.css';
 
 const $ = (s) => document.querySelector(s);
@@ -16,17 +15,105 @@ let filter = 'همه';
 let editing = null;
 
 const money = (n) => new Intl.NumberFormat('fa-IR').format(Number(n) || 0);
-const today = () => new Date().toISOString().slice(0, 10);
+const today = () => {
+  const d = new Date();
+  const local = new Date(d.getTime() - d.getTimezoneOffset() * 60000);
+  return local.toISOString().slice(0, 10);
+};
 
 function save() {
-  localStorage.setItem(KEY, JSON.stringify(checks));
-  render();
+  try {
+    localStorage.setItem(KEY, JSON.stringify(checks));
+    render();
+  } catch {
+    alert('ذخیره اطلاعات انجام نشد. فضای ذخیره‌سازی دستگاه را بررسی کن.');
+  }
 }
 
 function status(c) {
   if (c.paid) return 'تسویه‌شده';
   if (c.date && c.date < today()) return 'سررسید گذشته';
   return 'در انتظار';
+}
+
+function backup() {
+  const data = {
+    app: 'CheckYar',
+    version: 1,
+    exportedAt: new Date().toISOString(),
+    checks
+  };
+  const blob = new Blob([JSON.stringify(data, null, 2)], {
+    type: 'application/json;charset=utf-8'
+  });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `checkyar-backup-${today()}.json`;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+function restoreFile(file) {
+  if (!file) return;
+  const reader = new FileReader();
+
+  reader.onload = () => {
+    try {
+      const parsed = JSON.parse(reader.result);
+      const imported = Array.isArray(parsed) ? parsed : parsed.checks;
+
+      if (!Array.isArray(imported)) {
+        throw new Error('ساختار فایل پشتیبان معتبر نیست.');
+      }
+
+      const valid = imported.every(c =>
+        c &&
+        typeof c === 'object' &&
+        ['دریافتی', 'صادره'].includes(c.type) &&
+        Number.isFinite(Number(c.amount)) &&
+        Number(c.amount) > 0 &&
+        typeof c.person === 'string' &&
+        typeof c.paid === 'boolean'
+      );
+
+      if (!valid) {
+        throw new Error('اطلاعات داخل فایل معتبر نیست.');
+      }
+
+      if (!confirm(`تعداد ${imported.length} چک از فایل بازیابی شود؟ اطلاعات فعلی جایگزین خواهد شد.`)) {
+        $('#restoreFile').value = '';
+        return;
+      }
+
+      checks = imported.map(c => ({
+        id: String(c.id || crypto.randomUUID()),
+        type: c.type,
+        amount: Number(c.amount),
+        person: String(c.person).slice(0, 100),
+        bank: String(c.bank || '').slice(0, 60),
+        number: String(c.number || '').slice(0, 100),
+        date: String(c.date || ''),
+        note: String(c.note || '').slice(0, 500),
+        paid: c.paid
+      }));
+
+      editing = null;
+      save();
+      alert('بازیابی اطلاعات با موفقیت انجام شد.');
+    } catch (err) {
+      alert(err.message || 'خواندن فایل پشتیبان ناموفق بود.');
+    } finally {
+      $('#restoreFile').value = '';
+    }
+  };
+
+  reader.onerror = () => {
+    alert('خواندن فایل ناموفق بود.');
+    $('#restoreFile').value = '';
+  };
+
+  reader.readAsText(file);
 }
 
 function render() {
@@ -39,7 +126,6 @@ function render() {
       <div class="brand"><span class="logo">✓</span><div><h1>چک‌یار</h1><p>مدیریت ساده چک‌ها</p></div></div>
       <span class="local">ذخیره روی همین دستگاه</span>
     </header>
-
     <main>
       <section class="hero">
         <p class="muted">مجموع مبلغ چک‌های تسویه‌نشده</p>
@@ -52,13 +138,23 @@ function render() {
       </section>
 
       <section class="panel">
+        <h2>پشتیبان‌گیری و بازیابی</h2>
+        <p>از چک‌ها فایل پشتیبان بگیر یا اطلاعات را از فایل قبلی بازیابی کن.</p>
+        <div class="actions">
+          <button id="backupBtn" type="button" class="primary">دانلود پشتیبان</button>
+          <button id="restoreBtn" type="button" class="secondary">بازیابی از فایل</button>
+          <input id="restoreFile" type="file" accept=".json,application/json" hidden />
+        </div>
+        <p class="notice">بازیابی، فهرست فعلی را جایگزین می‌کند. فایل پشتیبان را در جای امن نگه دار.</p>
+      </section>
+
+      <section class="panel">
         <h2>${editing ? 'ویرایش چک' : 'ثبت چک جدید'}</h2>
         <form id="checkForm">
           <div class="fields">
             <label>نوع چک
               <select name="type">
-                <option>دریافتی</option>
-                <option>صادره</option>
+                <option>دریافتی</option><option>صادره</option>
               </select>
             </label>
             <label>مبلغ (تومان)
@@ -97,8 +193,12 @@ function render() {
         </div>
         <div id="list"></div>
       </section>
-      <p class="notice">اطلاعات فقط در حافظه همین دستگاه ذخیره می‌شود. با پاک‌کردن داده‌های برنامه ممکن است اطلاعات از بین برود. این برنامه به بانک یا سامانه صیاد متصل نیست.</p>
+      <p class="notice">اطلاعات فقط در حافظه همین دستگاه ذخیره می‌شود. این برنامه به بانک یا سامانه صیاد متصل نیست.</p>
     </main>`;
+
+  $('#backupBtn').addEventListener('click', backup);
+  $('#restoreBtn').addEventListener('click', () => $('#restoreFile').click());
+  $('#restoreFile').addEventListener('change', e => restoreFile(e.target.files[0]));
 
   const form = $('#checkForm');
   if (editing) {
@@ -116,7 +216,8 @@ function render() {
     e.preventDefault();
     const data = Object.fromEntries(new FormData(form).entries());
     data.amount = Number(data.amount);
-    if (!data.person.trim() || data.amount <= 0) return;
+    data.person = data.person.trim();
+    if (!data.person || data.amount <= 0) return;
 
     if (editing) {
       const old = checks.find(c => c.id === editing);
@@ -163,7 +264,7 @@ function updateList() {
     const st = status(c);
     return `<article class="check-card">
       <div class="card-top">
-        <div><span class="type">${c.type}</span><h3>${escapeHTML(c.person)}</h3></div>
+        <div><span class="type">${escapeHTML(c.type)}</span><h3>${escapeHTML(c.person)}</h3></div>
         <span class="status ${c.paid ? 'paid' : st === 'سررسید گذشته' ? 'late' : ''}">${st}</span>
       </div>
       <div class="amount">${money(c.amount)} <small>تومان</small></div>
@@ -174,9 +275,9 @@ function updateList() {
       </div>
       ${c.note ? `<p class="note">${escapeHTML(c.note)}</p>` : ''}
       <div class="card-actions">
-        <button data-edit="${c.id}" class="secondary">ویرایش</button>
-        <button data-paid="${c.id}" class="secondary">${c.paid ? 'لغو تسویه' : 'تسویه شد'}</button>
-        <button data-delete="${c.id}" class="danger">حذف</button>
+        <button data-edit="${escapeHTML(c.id)}" class="secondary">ویرایش</button>
+        <button data-paid="${escapeHTML(c.id)}" class="secondary">${c.paid ? 'لغو تسویه' : 'تسویه شد'}</button>
+        <button data-delete="${escapeHTML(c.id)}" class="danger">حذف</button>
       </div>
     </article>`;
   }).join('');
